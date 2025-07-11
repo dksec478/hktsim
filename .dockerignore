@@ -1,5 +1,11 @@
+<<<<<<< HEAD
 .env
 cookies.json
 app.log
 __pycache__
 *.pyc
+=======
+node_modules
+npm-debug.log
+app.log
+>>>>>>> 89d520d (初始化 Node.js + Puppeteer 應用)
