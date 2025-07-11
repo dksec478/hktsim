@@ -32,21 +32,20 @@ def init_driver():
         try:
             if driver:
                 driver.quit()
-        except:
-            pass
-        service = Service("/usr/bin/chromedriver")
-        options = webdriver.ChromeOptions()
-        options.add_argument("--headless")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--disable-extensions")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        options.binary_location = "/usr/bin/chromium"
-        try:
+                logging.info("關閉舊瀏覽器實例")
+            service = Service("/usr/bin/chromedriver")
+            options = webdriver.ChromeOptions()
+            options.add_argument("--headless")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument("--disable-gpu")
+            options.add_argument("--disable-extensions")
+            options.add_argument("--window-size=1280,720")  # 降低解析度
+            options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            options.binary_location = "/usr/bin/chromium"
+            start_time = time.time()
             driver = webdriver.Chrome(service=service, options=options)
-            logging.info("瀏覽器初始化成功")
+            logging.info(f"瀏覽器初始化成功，耗時 {time.time() - start_time:.2f} 秒")
             return driver
         except Exception as e:
             logging.error(f"瀏覽器初始化失敗: {str(e)}")
@@ -159,6 +158,7 @@ def check_sim():
                 return jsonify({"message": "無效的ICCID格式"}), 400
             
             logging.info(f"開始查詢 ICCID: {iccid}")
+            start_time = time.time()
             
             if driver is None or not driver.session_id:
                 driver = init_driver()
@@ -216,6 +216,7 @@ def check_sim():
                         logging.warning(f"提取行數據失敗: {str(e)}")
                         continue
                 
+                logging.info(f"查詢完成，耗時 {time.time() - start_time:.2f} 秒")
                 if found:
                     logging.info(f"查詢成功: {iccid}")
                     return jsonify(result)
@@ -228,7 +229,7 @@ def check_sim():
                 return jsonify({"message": f"查無此ICCID：{iccid}，請確認輸入正確！"}), 404
         
         except Exception as e:
-            logging.error(f"查詢失敗: {str(e)}")
+            logging.error(f"查詢失敗: {str(e)}，耗時 {time.time() - start_time:.2f} 秒")
             try:
                 driver.quit()
                 driver = None
