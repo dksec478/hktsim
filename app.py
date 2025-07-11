@@ -13,7 +13,7 @@ import json
 
 app = Flask(__name__)
 
-# 設置日誌（本機除錯用 app.log）
+# 設置日誌
 logging.basicConfig(level=logging.INFO, filename="app.log", filemode="a", format="%(asctime)s - %(levelname)s - %(message)s")
 
 # 全局瀏覽器實例
@@ -37,10 +37,15 @@ def init_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-extensions")
     options.add_argument("--window-size=1920,1080")
+    options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.7204.92 Safari/537.36")
     options.binary_location = "/usr/bin/chromium"
-    driver = webdriver.Chrome(service=service, options=options)
-    logging.info("瀏覽器初始化成功")
-    return driver
+    try:
+        driver = webdriver.Chrome(service=service, options=options)
+        logging.info("瀏覽器初始化成功")
+        return driver
+    except Exception as e:
+        logging.error(f"瀏覽器初始化失敗: {str(e)}")
+        raise
 
 def save_cookies():
     try:

@@ -6,10 +6,11 @@ RUN apt-get update && apt-get install -y \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# 安裝最新 Chromium（不指定版本）
-RUN apt-get update && apt-get install -y \
-    chromium \
-    && rm -rf /var/lib/apt/lists/*
+# 下載並安裝 Chromium 快照（版本 138.0.7204.92 對應快照 ID 1271398）
+RUN wget -q https://commondatastorage.googleapis.com/chromium-browser-snapshots/Linux_x64/1271398/chromium.zip \
+    && unzip chromium.zip -d /usr/bin/ \
+    && chmod +x /usr/bin/chromium \
+    && rm chromium.zip
 
 # 下載並安裝 ChromeDriver 138
 RUN wget -q https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/138.0.7204.92/linux64/chromedriver-linux64.zip \
