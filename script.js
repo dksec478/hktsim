@@ -1,51 +1,55 @@
-async function checkSimStatus() {
-    const iccidInput = document.getElementById("iccid").value.trim();
-    const resultElement = document.getElementById("result");
-    const loadingElement = document.getElementById("loading");
-    const buttonElement = document.querySelector("button");
+async function checkSim() {
+    const iccid = document.getElementById("iccid").value.trim();
+    const resultTable = document.getElementById("result-table");
+    const resultBody = document.getElementById("result-body");
+    const errorMessage = document.getElementById("error-message");
 
-    resultElement.innerHTML = "";
-    resultElement.classList.remove("error");
+    // 清空先前結果
+    resultBody.innerHTML = "";
+    resultTable.style.display = "none";
+    errorMessage.style.display = "none";
 
-    if (!/^\d{19,20}$/.test(iccidInput)) {
-        resultElement.innerHTML = "請輸入有效的19或20位ICCID碼！";
-        resultElement.classList.add("error");
+    // 驗證 ICCID
+    if (!iccid || !/^\d{19,20}$/.test(iccid)) {
+        errorMessage.textContent = "請輸入有效的 19 或 20 位 ICCID";
+        errorMessage.style.display = "block";
         return;
     }
 
-    loadingElement.classList.remove("hidden");
-    buttonElement.disabled = true;
-
     try {
-        const response = await fetch("http://localhost:5000/check-sim", {
+        // 發送 POST 請求到 Render API
+        const response = await fetch("https://hktsim.onrender.com/check-sim", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ iccid: iccidInput }),
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ iccid })
         });
+
         const data = await response.json();
 
-        if (data.status) {
-            resultElement.innerHTML = `
-                <table>
-                    <tr><th>項目</th><th>資料</th></tr>
-                    <tr><td>IMSI</td><td>${data.imsi || "無資料"}</td></tr>
-                    <tr><td>ICCID</td><td>${data.iccid || "無資料"}</td></tr>
-                    <tr><td>MSISDN</td><td>${data.msisdn || "無資料"}</td></tr>
-                    <tr><td>狀態</td><td>${data.status || "無資料"}</td></tr>
-                    <tr><td>啟用日期</td><td>${data.activation_date || "無資料"}</td></tr>
-                    <tr><td>結束日期</td><td>${data.termination_date || "無資料"}</td></tr>
-                    <tr><td>數據使用</td><td>${data.data_usage || "無資料"}</td></tr>
-                </table>
+        if (response.ok) {
+            // 顯示查詢結果
+            resultTable.style.display = "table";
+            const row = document.createElement("tr");
+            row.innerHTML = `
+                <td>${data.imsi || "N/A"}</td>
+                <td>${data.iccid || "N/A"}</td>
+                <td>${data.msisdn || "N/A"}</td>
+                <td>${data.status || "N/A"}</td>
+                <td>${data.activation_date || "N/A"}</td>
+                <td>${data.termination_date || "N/A"}</td>
+                <td>${data.data_usage || "N/A"}</td>
             `;
+            resultBody.appendChild(row);
         } else {
-            resultElement.innerHTML = data.message || "查無此ICCID，請確認輸入正確！";
-            resultElement.classList.add("error");
+            // 顯示錯誤訊息
+            errorMessage.textContent = data.message || "查詢失敗，請稍後重試";
+            errorMessage.style.display = "block";
         }
     } catch (error) {
-        resultElement.innerHTML = "查詢失敗，請稍後再試！";
-        resultElement.classList.add("error");
-    } finally {
-        loadingElement.classList.add("hidden");
-        buttonElement.disabled = false;
+        errorMessage.textContent = "無法連繫伺服器，請檢查網路";
+        errorMessage.style.display = "block";
+        console.error("Error:", error);
     }
 }
