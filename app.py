@@ -1,5 +1,4 @@
-from flask import Flask, request, jsonify, render_template
-from flask_cors import CORS
+from flask import Flask, request, jsonify, send_file
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
@@ -14,7 +13,6 @@ import logging
 import json
 
 app = Flask(__name__)
-CORS(app)  # 支援跨域，後續可限制 origins
 
 # 設置日誌（本機除錯用 app.log）
 logging.basicConfig(level=logging.INFO, filename="app.log", filemode="a", format="%(asctime)s - %(levelname)s - %(message)s")
@@ -26,10 +24,9 @@ os.environ["WDM_LOG_LEVEL"] = "0"
 driver = None
 USERNAME = os.getenv("SIM_USERNAME", "mttelecom_admin")
 PASSWORD = os.getenv("SIM_PASSWORD", "gAry20250708")
-COOKIES_FILE = "/tmp/cookies.json"  # Render 可寫目錄
+COOKIES_FILE = "/tmp/cookies.json"
 
 def init_driver():
-    """初始化 Selenium 瀏覽器"""
     global driver
     try:
         if driver:
@@ -49,7 +46,6 @@ def init_driver():
     return driver
 
 def save_cookies():
-    """保存 cookies"""
     try:
         cookies = driver.get_cookies()
         with open(COOKIES_FILE, "w") as f:
@@ -59,7 +55,6 @@ def save_cookies():
         logging.error(f"Cookies 保存失敗: {str(e)}")
 
 def load_cookies():
-    """載入 cookies"""
     try:
         if os.path.exists(COOKIES_FILE):
             with open(COOKIES_FILE, "r") as f:
@@ -79,7 +74,6 @@ def load_cookies():
         return False
 
 def is_session_valid():
-    """檢查會話是否有效"""
     try:
         driver.get("https://iot.app.consoleconnect.com/portal/#/zh_TW/72000044/subscriptions/")
         WebDriverWait(driver, 5).until(
@@ -95,7 +89,6 @@ def is_session_valid():
         return False
 
 def login():
-    """執行登入並保存 cookies"""
     try:
         driver.get("https://iot.app.consoleconnect.com/")
         wait = WebDriverWait(driver, 10)
@@ -124,8 +117,15 @@ def login():
 
 @app.route("/", methods=["GET"])
 def home():
-    """根路由渲染 index.html"""
-    return render_template("index.html")
+    return send_file("index.html")
+
+@app.route("/styles.css", methods=["GET"])
+def serve_css():
+    return send_file("styles.css")
+
+@app.route("/script.js", methods=["GET"])
+def serve_js():
+    return send_file("script.js")
 
 @app.route("/check-sim", methods=["POST"])
 def check_sim():
@@ -140,7 +140,6 @@ def check_sim():
         
         logging.info(f"開始查詢 ICCID: {iccid}")
         
-        # 初始化或檢查瀏覽器
         if driver is None or not driver.session_id:
             driver = init_driver()
             login()
@@ -151,7 +150,6 @@ def check_sim():
                 logging.info("會話超時，重新登入")
                 login()
         
-        # 執行查詢
         driver.get("https://iot.app.consoleconnect.com/portal/#/zh_TW/72000044/subscriptions/")
         wait = WebDriverWait(driver, 10)
         iccid_input_xpath = "/html/body/div[1]/div/div[2]/div[1]/div/div[4]/div/div/div/div[3]/div/div/div/div[1]/input"
@@ -162,7 +160,6 @@ def check_sim():
             time.sleep(0.05)
         iccid_field.send_keys(Keys.RETURN)
         
-        # 等待表格更新
         result = {}
         try:
             wait.until(EC.presence_of_element_located((By.XPATH, "//table/tbody/tr")))
@@ -221,7 +218,6 @@ def check_sim():
 
 @app.teardown_appcontext
 def cleanup(exception):
-    """應用關閉時清理瀏覽器"""
     global driver
     if driver:
         try:
