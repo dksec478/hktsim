@@ -6,7 +6,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from webdriver_manager.chrome import ChromeDriverManager
 import os
 import time
 import logging
@@ -16,9 +15,6 @@ app = Flask(__name__)
 
 # 設置日誌（本機除錯用 app.log）
 logging.basicConfig(level=logging.INFO, filename="app.log", filemode="a", format="%(asctime)s - %(levelname)s - %(message)s")
-
-# 減少 webdriver-manager 日誌
-os.environ["WDM_LOG_LEVEL"] = "0"
 
 # 全局瀏覽器實例
 driver = None
@@ -33,7 +29,7 @@ def init_driver():
             driver.quit()
     except:
         pass
-    service = Service(ChromeDriverManager().install())
+    service = Service("/usr/bin/chromedriver")  # 直接使用手動安裝的 ChromeDriver
     options = webdriver.ChromeOptions()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -41,6 +37,7 @@ def init_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-extensions")
     options.add_argument("--window-size=1920,1080")
+    options.binary_location = "/usr/bin/chromium"  # 指定 Chromium 路徑
     driver = webdriver.Chrome(service=service, options=options)
     logging.info("瀏覽器初始化成功")
     return driver
