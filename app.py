@@ -29,7 +29,7 @@ def init_driver():
             driver.quit()
     except:
         pass
-    service = Service("/usr/bin/chromedriver")  # 直接使用手動安裝的 ChromeDriver
+    service = Service("/usr/bin/chromedriver")
     options = webdriver.ChromeOptions()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -37,7 +37,7 @@ def init_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-extensions")
     options.add_argument("--window-size=1920,1080")
-    options.binary_location = "/usr/bin/chromium"  # 指定 Chromium 路徑
+    options.binary_location = "/usr/bin/chromium"
     driver = webdriver.Chrome(service=service, options=options)
     logging.info("瀏覽器初始化成功")
     return driver

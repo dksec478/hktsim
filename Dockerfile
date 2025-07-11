@@ -6,9 +6,9 @@ RUN apt-get update && apt-get install -y \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# 安裝特定版本的 Chromium（138）
+# 安裝最新 Chromium（不指定版本）
 RUN apt-get update && apt-get install -y \
-    chromium=138.0.7204.92-1 \
+    chromium \
     && rm -rf /var/lib/apt/lists/*
 
 # 下載並安裝 ChromeDriver 138
