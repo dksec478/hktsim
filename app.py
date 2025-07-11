@@ -14,7 +14,7 @@ import logging
 import json
 
 app = Flask(__name__)
-CORS(app)
+CORS(app)  # 為前端整合預留 CORS，稍後可限制 origins
 
 # 設置日誌（保留 app.log 用於本機除錯）
 logging.basicConfig(level=logging.INFO, filename="app.log", filemode="a", format="%(asctime)s - %(levelname)s - %(message)s")
@@ -121,6 +121,11 @@ def login():
     except Exception as e:
         logging.error(f"登入失敗: {str(e)}")
         return False
+
+@app.route("/", methods=["GET"])
+def home():
+    """根路由，解決 404 Not Found"""
+    return jsonify({"message": "Welcome to HKT SIM Checker API. Use /check-sim endpoint for queries."}), 200
 
 @app.route("/check-sim", methods=["POST"])
 def check_sim():
