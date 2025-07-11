@@ -37,11 +37,14 @@ async function initBrowser() {
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
                 '--disable-extensions',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--disable-setuid-sandbox',
                 '--window-size=1280,720',
                 '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             ],
-            // 限制記憶體使用
-            executablePath: process.env.NODE_ENV === 'production' ? '/usr/bin/chromium-browser' : undefined
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser'
         });
         log('info', '瀏覽器初始化成功');
         return browser;
@@ -79,16 +82,23 @@ async function loadCookies(page) {
 
 async function isSessionValid(page) {
     try {
-        await page.goto('https://iot.app.consoleconnect.com/portal/#/zh_TW/72000044/subscriptions/', { waitUntil: 'domcontentloaded', timeout: 10000 });
+        await page.goto('https://iot.app.consoleconnect.com/portal/#/zh_TW/72000044/subscriptions/', { waitUntil: 'networkidle2', timeout: 15000 });
         const url = page.url();
         log('info', `當前頁面 URL: ${url}`);
-        if (url.includes('login')) {
+        if (url.includes('login') || url.includes('auth')) {
             log('info', '導向登錄頁面，會話無效');
             return false;
         }
-        await page.waitForSelector('input', { timeout: 5000 });
-        log('info', '會話有效，查詢頁面正常');
-        return true;
+        const inputSelector = 'input[placeholder], input[type="text"], input[name="search"]';
+        try {
+            await page.waitForSelector(inputSelector, { timeout: 15000 });
+            log('info', '會話有效，找到輸入框');
+            return true;
+        } catch (error) {
+            const pageContent = await page.evaluate(() => document.body.innerHTML.slice(0, 1000));
+            log('error', `輸入框選擇器失敗: ${error.message}, 頁面內容: ${pageContent}`);
+            return false;
+        }
     } catch (error) {
         log('error', `會話檢查失敗: ${error.message}`);
         return false;
@@ -97,18 +107,18 @@ async function isSessionValid(page) {
 
 async function login(page) {
     try {
-        await page.goto('https://iot.app.consoleconnect.com/', { waitUntil: 'domcontentloaded', timeout: 10000 });
+        await page.goto('https://iot.app.consoleconnect.com/', { waitUntil: 'networkidle2', timeout: 15000 });
         const url = page.url();
         log('info', `登錄頁面 URL: ${url}`);
         await page.waitForSelector('input[name="username"]', { timeout: 10000 });
         await page.type('input[name="username"]', USERNAME);
         await page.type('input[name="password"]', PASSWORD);
         await page.click('input[type="submit"]');
-        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 });
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
         await saveCookies(page);
         const postLoginUrl = page.url();
         log('info', `登錄後頁面 URL: ${postLoginUrl}`);
-        if (postLoginUrl.includes('login')) {
+        if (postLoginUrl.includes('login') || postLoginUrl.includes('auth')) {
             log('error', '登錄失敗，仍在登錄頁面');
             return false;
         }
@@ -166,7 +176,17 @@ app.post('/check-sim', async (req, res) => {
         }
         const page = await browser.newPage();
         try {
-            await page.setDefaultTimeout(10000);
+            await page.setDefaultTimeout(15000);
+            // 禁用不必要資源以減少記憶體
+            await page.setRequestInterception(true);
+            page.on('request', (req) => {
+                if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
+                    req.abort();
+                } else {
+                    req.continue();
+                }
+            });
+
             await loadCookies(page);
             if (!await isSessionValid(page)) {
                 log('info', '會話超時，重新登入');
@@ -181,13 +201,14 @@ app.post('/check-sim', async (req, res) => {
             await page.goto('https://iot.app.consoleconnect.com/portal/#/zh_TW/72000044/subscriptions/', { waitUntil: 'networkidle2', timeout: 15000 });
             const url = page.url();
             log('info', `當前頁面 URL: ${url}`);
-            if (url.includes('login')) {
+            if (url.includes('login') || url.includes('auth')) {
                 log('error', '查詢頁面導向登錄頁面');
                 res.status(500).json({ message: '會話失效，無法訪問查詢頁面' });
                 return;
             }
 
-            const iccidInput = await page.waitForSelector('input', { timeout: 10000 });
+            const inputSelector = 'input[placeholder], input[type="text"], input[name="search"]';
+            const iccidInput = await page.waitForSelector(inputSelector, { timeout: 15000 });
             log('info', '找到 ICCID 輸入框');
             await iccidInput.type(iccid);
             await iccidInput.press('Enter');
@@ -199,7 +220,6 @@ app.post('/check-sim', async (req, res) => {
                 const rows = await page.$$('table tbody tr:not([style*="display: none"])');
                 log('info', `找到 ${rows.length} 個可見表格行`);
 
-                // 記錄表格內容
                 const tableContent = await page.evaluate(() => {
                     const table = document.querySelector('table tbody');
                     return table ? table.innerText.slice(0, 1000) : '無表格內容';
