@@ -15,8 +15,7 @@ const mutex = new semaphore(1);
 const log = (level, message) => {
     const timestamp = new Date().toISOString();
     console.log(`${timestamp} - ${level} - ${message}`);
-    // 可選：寫入 app.log
-    fs.appendFile(path.join(__dirname, 'app.log'), `${timestamp} - ${level} - ${message}\n`);
+    fs.appendFile(path.join(__dirname, 'app.log'), `${timestamp} - ${level} - ${message}\n`).catch(() => {});
 };
 
 // 全局瀏覽器實例
