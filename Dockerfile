@@ -1,7 +1,8 @@
 FROM node:18-slim
 
-# 安裝 Puppeteer 依賴
+# 安裝 Chromium 和 Puppeteer 依賴
 RUN apt-get update && apt-get install -y \
+    chromium \
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \
