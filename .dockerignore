@@ -1,0 +1,5 @@
+.env
+cookies.json
+app.log
+__pycache__
+*.pyc

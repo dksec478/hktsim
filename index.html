@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SIM卡狀態查詢</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>SIM卡狀態查詢</h1>
+        <p>請輸入您的SIM卡ICCID碼（19或20位數字）</p>
+        <div class="input-group">
+            <input type="text" id="iccid" placeholder="輸入ICCID碼，例如8985200015505196071" maxlength="20">
+            <button onclick="checkSimStatus()">查詢</button>
+        </div>
+        <div id="loading" class="loading hidden">正在查詢，請稍候...</div>
+        <div id="result" class="result"></div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
