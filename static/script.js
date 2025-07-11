@@ -17,8 +17,8 @@ async function checkSim() {
     }
 
     try {
-        // 發送 POST 請求到 Render API
-        const response = await fetch("https://hktsim.onrender.com/check-sim", {
+        // 發送 POST 請求
+        const response = await fetch("/check-sim", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json"

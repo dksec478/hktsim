@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -14,22 +14,22 @@ import logging
 import json
 
 app = Flask(__name__)
-CORS(app)  # 為前端整合預留 CORS，稍後可限制 origins
+CORS(app)  # 支援跨域，後續可限制 origins
 
-# 設置日誌（保留 app.log 用於本機除錯）
+# 設置日誌（本機除錯用 app.log）
 logging.basicConfig(level=logging.INFO, filename="app.log", filemode="a", format="%(asctime)s - %(levelname)s - %(message)s")
 
-# 減少 webdriver-manager 日誌（適應 Render）
+# 減少 webdriver-manager 日誌
 os.environ["WDM_LOG_LEVEL"] = "0"
 
 # 全局瀏覽器實例
 driver = None
 USERNAME = os.getenv("SIM_USERNAME", "mttelecom_admin")
 PASSWORD = os.getenv("SIM_PASSWORD", "gAry20250708")
-COOKIES_FILE = "/tmp/cookies.json"  # Render 的可寫目錄
+COOKIES_FILE = "/tmp/cookies.json"  # Render 可寫目錄
 
 def init_driver():
-    """初始化 Selenium 瀏覽器，使用 webdriver-manager"""
+    """初始化 Selenium 瀏覽器"""
     global driver
     try:
         if driver:
@@ -49,7 +49,7 @@ def init_driver():
     return driver
 
 def save_cookies():
-    """保存 cookies 到檔案"""
+    """保存 cookies"""
     try:
         cookies = driver.get_cookies()
         with open(COOKIES_FILE, "w") as f:
@@ -59,7 +59,7 @@ def save_cookies():
         logging.error(f"Cookies 保存失敗: {str(e)}")
 
 def load_cookies():
-    """從檔案載入 cookies"""
+    """載入 cookies"""
     try:
         if os.path.exists(COOKIES_FILE):
             with open(COOKIES_FILE, "r") as f:
@@ -124,8 +124,8 @@ def login():
 
 @app.route("/", methods=["GET"])
 def home():
-    """根路由，解決 404 Not Found"""
-    return jsonify({"message": "Welcome to HKT SIM Checker API. Use /check-sim endpoint for queries."}), 200
+    """根路由渲染 index.html"""
+    return render_template("index.html")
 
 @app.route("/check-sim", methods=["POST"])
 def check_sim():

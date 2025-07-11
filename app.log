@@ -1,0 +1,8 @@
+2025-07-11 11:57:29,347 - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2025-07-11 11:57:29,347 - INFO - [33mPress CTRL+C to quit[0m
+2025-07-11 11:57:29,349 - INFO -  * Restarting with stat
+2025-07-11 11:57:30,404 - WARNING -  * Debugger is active!
+2025-07-11 11:57:30,408 - INFO -  * Debugger PIN: 103-205-313
+2025-07-11 11:57:35,464 - ERROR - ¬d¸ß¥¢±Ñ: 400 Bad Request: Failed to decode JSON object: Expecting value: line 1 column 1 (char 0)
+2025-07-11 11:57:35,469 - INFO - 127.0.0.1 - - [11/Jul/2025 11:57:35] "[35m[1mPOST /check-sim HTTP/1.1[0m" 500 -
