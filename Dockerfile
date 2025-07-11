@@ -20,10 +20,6 @@ RUN apt-get update && apt-get install -y \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# 設置環境變數
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
-ENV PUPPETEER_CACHE_DIR=/app/.cache/puppeteer
-
 # 設置工作目錄
 WORKDIR /app
 

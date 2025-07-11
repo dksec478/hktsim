@@ -30,6 +30,8 @@ async function initBrowser() {
             await browser.close();
             log('info', '關閉舊瀏覽器實例');
         }
+        const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || (await puppeteer.executablePath());
+        log('info', `使用 Chromium 路徑: ${executablePath}`);
         browser = await puppeteer.launch({
             headless: 'new',
             args: [
@@ -44,7 +46,7 @@ async function initBrowser() {
                 '--window-size=1280,720',
                 '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             ],
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser'
+            executablePath
         });
         log('info', '瀏覽器初始化成功');
         return browser;
