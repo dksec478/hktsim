@@ -4,19 +4,9 @@ FROM python:3.9-slim
 RUN apt-get update && apt-get install -y \
     wget \
     unzip \
-    && rm -rf /var/lib/apt/lists/*
-
-# 安裝最新 Chromium
-RUN apt-get update && apt-get install -y \
     chromium \
+    chromium-driver \
     && rm -rf /var/lib/apt/lists/*
-
-# 下載並安裝 ChromeDriver 138
-RUN wget -q https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/138.0.7204.92/linux64/chromedriver-linux64.zip \
-    && unzip chromedriver-linux64.zip \
-    && mv chromedriver-linux64/chromedriver /usr/bin/chromedriver \
-    && chmod +x /usr/bin/chromedriver \
-    && rm chromedriver-linux64.zip
 
 # 設置工作目錄
 WORKDIR /app
@@ -32,4 +22,4 @@ COPY . .
 EXPOSE 5000
 
 # 運行應用
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--timeout", "120", "app:app"]
