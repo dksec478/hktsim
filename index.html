@@ -3,34 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HKT SIM 卡查詢</title>
+    <title>SIM 卡查詢</title>
     <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-    <div class="container">
-        <h1>HKT SIM 卡查詢</h1>
-        <div class="input-group">
-            <input type="text" id="iccid" placeholder="輸入 19 或 20 位 ICCID" maxlength="20">
-            <button onclick="checkSim()">查詢</button>
-        </div>
-        <div id="result" class="result">
-            <table id="result-table" style="display: none;">
-                <thead>
-                    <tr>
-                        <th>IMSI</th>
-                        <th>ICCID</th>
-                        <th>MSISDN</th>
-                        <th>狀態</th>
-                        <th>啟用日期</th>
-                        <th>終止日期</th>
-                        <th>數據使用量</th>
-                    </tr>
-                </thead>
-                <tbody id="result-body"></tbody>
-            </table>
-            <p id="error-message" style="color: red; display: none;"></p>
-        </div>
+    <h1>SIM 卡查詢</h1>
+    <div>
+        <label for="iccid">輸入 ICCID:</label>
+        <input type="text" id="iccid" placeholder="請輸入 19 或 20 位 ICCID">
+        <button onclick="checkSim()">查詢</button>
     </div>
+    <div id="result"></div>
     <script src="/script.js"></script>
 </body>
 </html>
