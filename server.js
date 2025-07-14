@@ -47,8 +47,8 @@ async function initBrowser() {
                 '--no-first-run',
                 '--no-zygote',
                 '--disable-setuid-sandbox',
+                '--disable-features=site-per-process',
                 '--window-size=1280,720',
-                '--disable-features=site-per-process', // 減少內存使用
                 '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             ],
             executablePath
@@ -135,6 +135,24 @@ async function login(page) {
         log('error', `登入失敗: ${error.message}`);
         return false;
     }
+}
+
+async function scrollToLoadMore(page, maxScrolls = 100) {
+    let scrollCount = 0;
+    let previousRowCount = 0;
+    while (scrollCount < maxScrolls) {
+        const currentRowCount = await page.evaluate(() => document.querySelectorAll('table tbody tr:not([style*="display: none"])').length);
+        log('info', `當前表格行數: ${currentRowCount}, 滾動次數: ${scrollCount + 1}`);
+        if (currentRowCount === previousRowCount && scrollCount > 0) {
+            log('info', '無更多數據加載');
+            break;
+        }
+        await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+        await page.waitForTimeout(2000); // 等待新數據加載
+        previousRowCount = currentRowCount;
+        scrollCount++;
+    }
+    return scrollCount;
 }
 
 app.get('/healthz', (req, res) => {
@@ -229,29 +247,78 @@ app.post('/check-sim', async (req, res) => {
                 return;
             }
 
+            // 清空輸入框並輸入 ICCID
+            await iccidInput.click({ clickCount: 3 }); // 選中並清空
             await iccidInput.type(cleanedIccid);
+            await page.evaluate((inputId, value) => {
+                const input = document.querySelector(inputId);
+                input.value = value;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                input.dispatchEvent(new Event('keyup', { bubbles: true }));
+            }, inputSelector, cleanedIccid);
             await iccidInput.press('Enter');
             log('info', '已輸入 ICCID 並提交');
 
-            // 檢查是否有搜索按鈕並點擊
-            const searchButton = await page.$('button[aria-label="Search"], button[type="submit"], button[title="Search"]');
+            // 檢查並點擊搜索按鈕（備用）
+            const searchButtonSelectors = [
+                'button[aria-label="Search"]',
+                'button[type="submit"]',
+                'button[title="Search"]',
+                'button.v-button.v-widget[aria-label="Search"]',
+                'button.v-button',
+                'button:contains("Search")',
+                'button:contains("查詢")'
+            ];
+            let searchButton = null;
+            for (const selector of searchButtonSelectors) {
+                try {
+                    searchButton = await page.$(selector);
+                    if (searchButton) break;
+                } catch (error) {
+                    log('info', `未找到按鈕選擇器 ${selector}: ${error.message}`);
+                }
+            }
             if (searchButton) {
                 log('info', '找到搜索按鈕，執行點擊');
                 await searchButton.click();
-                await page.waitForTimeout(2000); // 等待表格刷新
+                await page.waitForTimeout(3000); // 等待表格刷新
+            } else {
+                log('info', '未找到搜索按鈕，依賴自動加載');
             }
 
-            // 等待表格完全加載
+            // 等待表格過濾完成（預期 0 或 1 行）
             try {
                 await page.waitForFunction(() => {
                     const table = document.querySelector('table tbody');
+                    const rows = document.querySelectorAll('table tbody tr:not([style*="display: none"])');
                     const loading = document.querySelector('table')?.classList.contains('loading');
-                    return table && !loading;
-                }, { timeout: 30000 });
+                    return table && !loading && rows.length <= 1;
+                }, { timeout: 40000 }); // 延長等待時間
             } catch (error) {
-                log('error', `表格加載失敗: ${error.message}`);
-                res.status(500).json({ message: `表格加載失敗：${error.message}` });
-                return;
+                const rowCount = await page.evaluate(() => document.querySelectorAll('table tbody tr:not([style*="display: none"])').length);
+                log('error', `表格過濾失敗，行數: ${rowCount}, 錯誤: ${error.message}`);
+                // 嘗試重新輸入
+                await iccidInput.click({ clickCount: 3 });
+                await iccidInput.type(cleanedIccid);
+                await page.evaluate((inputId, value) => {
+                    const input = document.querySelector(inputId);
+                    input.value = value;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    input.dispatchEvent(new Event('keyup', { bubbles: true }));
+                }, inputSelector, cleanedIccid);
+                await iccidInput.press('Enter');
+                if (searchButton) {
+                    await searchButton.click();
+                }
+                await page.waitForTimeout(3000);
+                const retryRowCount = await page.evaluate(() => document.querySelectorAll('table tbody tr:not([style*="display: none"])').length);
+                if (retryRowCount > 1) {
+                    log('error', `重新輸入後仍失敗，行數: ${retryRowCount}`);
+                    // 嘗試無限滾動
+                    await scrollToLoadMore(page);
+                }
             }
 
             const result = {};
@@ -266,7 +333,7 @@ app.post('/check-sim', async (req, res) => {
                 });
                 log('info', `表格內容: ${tableContent}`);
 
-                // 根據網站行為：正確 ICCID 返回 1 行，無效返回 0 行
+                // 處理結果：預期 0 或 1 行
                 if (rows.length === 0) {
                     log('info', `查無 ICCID: ${cleanedIccid}，表格無數據`);
                     res.status(404).json({ message: `查無此ICCID：${cleanedIccid}，請確認輸入正確！` });
@@ -274,47 +341,39 @@ app.post('/check-sim', async (req, res) => {
                 }
 
                 if (rows.length > 1) {
-                    log('warning', `查詢返回 ${rows.length} 行，預期僅 1 行，嘗試分頁處理`);
-                    // 分頁處理（備用）
-                    while (true) {
-                        for (const row of rows) {
-                            try {
-                                const iccidCell = await row.$eval('td:nth-child(4)', el => el.textContent.trim());
-                                log('info', `檢查行，ICCID: ${iccidCell}`);
-                                if (iccidCell === cleanedIccid) {
-                                    result.imsi = await row.$eval('td:nth-child(2)', el => el.textContent.trim()) || 'N/A';
-                                    result.iccid = iccidCell;
-                                    result.msisdn = await row.$eval('td:nth-child(5)', el => el.textContent.trim()) || 'N/A';
-                                    result.status = await row.$eval('td:nth-child(8)', el => el.textContent.trim()) || 'N/A';
-                                    result.activation_date = await row.$eval('td:nth-child(12)', el => el.textContent.trim()) || 'N/A';
-                                    result.termination_date = await row.$eval('td:nth-child(13)', el => el.textContent.trim()) || 'N/A';
-                                    try {
-                                        result.data_usage = await row.$eval('td:nth-child(21)', el => el.textContent.trim()) || 'N/A';
-                                        log('info', `數據使用: ${result.data_usage}`);
-                                    } catch {
-                                        result.data_usage = 'N/A';
-                                        log('warning', '無法提取數據使用');
-                                    }
-                                    log('info', `查詢成功: ${cleanedIccid}`);
-                                    res.json(result);
-                                    return;
+                    log('warning', `查詢返回 ${rows.length} 行，預期僅 1 行，嘗試無限滾動`);
+                    await scrollToLoadMore(page);
+                    const allRows = await page.$$('table tbody tr:not([style*="display: none"])');
+                    for (const row of allRows) {
+                        try {
+                            const iccidCell = await row.$eval('td:nth-child(4)', el => el.textContent.trim());
+                            log('info', `檢查行，ICCID: ${iccidCell}`);
+                            if (iccidCell === cleanedIccid) {
+                                result.imsi = await row.$eval('td:nth-child(2)', el => el.textContent.trim()) || 'N/A';
+                                result.iccid = iccidCell;
+                                result.msisdn = await row.$eval('td:nth-child(5)', el => el.textContent.trim()) || 'N/A';
+                                result.status = await row.$eval('td:nth-child(8)', el => el.textContent.trim()) || 'N/A';
+                                result.activation_date = await row.$eval('td:nth-child(12)', el => el.textContent.trim()) || 'N/A';
+                                result.termination_date = 'N/A';
+                                try {
+                                    result.data_usage = await row.$eval('td:nth-child(21)', el => el.textContent.trim()) || 'N/A';
+                                    log('info', `數據使用: ${result.data_usage}`);
+                                } catch {
+                                    result.data_usage = 'N/A';
+                                    log('warning', '無法提取數據使用');
                                 }
-                            } catch (error) {
-                                log('warning', `提取行數據失敗: ${error.message}`);
-                                continue;
+                                log('info', `查詢成功: ${cleanedIccid}`);
+                                res.json(result);
+                                return;
                             }
+                        } catch (error) {
+                            log('warning', `提取行數據失敗: ${error.message}`);
+                            continue;
                         }
-                        const nextButton = await page.$('button[aria-label="Next"]:not([disabled])');
-                        if (!nextButton) {
-                            log('info', `查無 ICCID: ${cleanedIccid}，無更多頁面`);
-                            res.status(404).json({ message: `查無此ICCID：${cleanedIccid}，請確認輸入正確！` });
-                            return;
-                        }
-                        log('info', '點擊下一頁');
-                        await nextButton.click();
-                        await page.waitForTimeout(2000);
-                        rows = await page.$$('table tbody tr:not([style*="display: none"])');
                     }
+                    log('info', `查無 ICCID: ${cleanedIccid}，已滾動所有數據`);
+                    res.status(404).json({ message: `查無此ICCID：${cleanedIccid}，請確認輸入正確！` });
+                    return;
                 }
 
                 // 處理單行結果
@@ -326,7 +385,7 @@ app.post('/check-sim', async (req, res) => {
                     result.msisdn = await row.$eval('td:nth-child(5)', el => el.textContent.trim()) || 'N/A';
                     result.status = await row.$eval('td:nth-child(8)', el => el.textContent.trim()) || 'N/A';
                     result.activation_date = await row.$eval('td:nth-child(12)', el => el.textContent.trim()) || 'N/A';
-                    result.termination_date = await row.$eval('td:nth-child(13)', el => el.textContent.trim()) || 'N/A';
+                    result.termination_date = 'N/A';
                     try {
                         result.data_usage = await row.$eval('td:nth-child(21)', el => el.textContent.trim()) || 'N/A';
                         log('info', `數據使用: ${result.data_usage}`);
@@ -347,6 +406,11 @@ app.post('/check-sim', async (req, res) => {
                 res.status(500).json({ message: `查詢失敗：${error.message}` });
             } finally {
                 await page.close();
+                if (browser) {
+                    await browser.close();
+                    browser = null;
+                    log('info', '關閉瀏覽器以釋放資源');
+                }
                 log('info', `查詢完成，耗時 ${(Date.now() - startTime) / 1000} 秒`);
             }
         } catch (error) {
