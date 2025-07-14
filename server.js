@@ -3,7 +3,7 @@ const puppeteer = require('puppeteer');
 const fs = require('fs').promises;
 const path = require('path');
 const app = express();
-const port = process.env.PORT || 5000;
+const port = process.env.PORT || 10000;
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -137,6 +137,103 @@ async function login(page) {
     }
 }
 
+async function simulatePostRequest(page, iccid) {
+    try {
+        let postData = null;
+        let headers = null;
+        let foundRequest = false;
+
+        // 攔截 POST 請求
+        await page.setRequestInterception(true);
+        page.on('request', request => {
+            if (request.method() === 'POST' && request.url().includes('/UIDL/')) {
+                postData = request.postData();
+                headers = request.headers();
+                log('info', `攔截到 POST 請求: URL=${request.url()}, Headers=${JSON.stringify(headers)}, Payload=${postData}`);
+                foundRequest = true;
+                request.continue();
+            } else {
+                if (['image', 'stylesheet', 'font', 'media'].includes(request.resourceType())) {
+                    request.abort();
+                } else {
+                    request.continue();
+                }
+            }
+        });
+
+        // 輸入 ICCID 並觸發請求
+        const inputSelector = 'input#quick-search-input';
+        const iccidInput = await page.waitForSelector(inputSelector, { timeout: 30000 });
+        await iccidInput.click({ clickCount: 3 });
+        await page.evaluate((inputId) => {
+            const input = document.querySelector(inputId);
+            input.value = '';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        }, inputSelector);
+        await iccidInput.type(iccid, { delay: 100 }); // 模擬人類輸入
+        await page.evaluate((inputId, value) => {
+            const input = document.querySelector(inputId);
+            input.value = value;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.dispatchEvent(new Event('keyup', { bubbles: true }));
+            input.dispatchEvent(new Event('blur', { bubbles: true }));
+            input.dispatchEvent(new Event('keydown', { bubbles: true }));
+        }, inputSelector, iccid);
+        await iccidInput.press('Enter');
+
+        // 等待 POST 請求響應
+        let responseData = null;
+        try {
+            const response = await page.waitForResponse(
+                response => response.url().includes('/UIDL/') && response.request().method() === 'POST',
+                { timeout: 10000 }
+            );
+            responseData = await response.text();
+            log('info', `POST 請求響應: ${responseData.slice(0, 1000)}`);
+        } catch (error) {
+            log('warning', `未捕獲 POST 響應: ${error.message}`);
+        }
+
+        // 關閉攔截以避免後續錯誤
+        await page.setRequestInterception(false);
+
+        if (foundRequest && responseData) {
+            // 解析響應（假設為 Vaadin UIDL 格式）
+            try {
+                const parsedData = JSON.parse(responseData);
+                // 假設響應包含表格數據
+                const rows = parsedData.changes?.find(change => change.type === 'put' && change.key === 'rows')?.value || [];
+                for (const row of rows) {
+                    if (row.iccid === iccid) {
+                        return {
+                            imsi: row.imsi || 'N/A',
+                            iccid: row.iccid,
+                            msisdn: row.msisdn || 'N/A',
+                            status: row.status || 'N/A',
+                            activation_date: row.activation_date || 'N/A',
+                            termination_date: 'N/A',
+                            data_usage: row.data_usage || 'N/A'
+                        };
+                    }
+                }
+                log('info', `POST 請求未找到 ICCID: ${iccid}`);
+                return null;
+            } catch (error) {
+                log('error', `解析 POST 響應失敗: ${error.message}`);
+                return null;
+            }
+        } else {
+            log('warning', '未攔截到查詢 POST 請求，依賴 UI 操作');
+            return null;
+        }
+    } catch (error) {
+        log('error', `模擬 POST 請求失敗: ${error.message}`);
+        return null;
+    }
+}
+
 async function scrollToLoadMore(page, targetIccid, maxScrolls = 100) {
     let scrollCount = 0;
     let previousRowCount = 0;
@@ -156,76 +253,12 @@ async function scrollToLoadMore(page, targetIccid, maxScrolls = 100) {
             return false;
         }
         await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-        await page.waitForTimeout(5000); // 增加等待時間
+        await page.waitForTimeout(5000);
         previousRowCount = currentRowCount;
         scrollCount++;
     }
     log('warning', `超過最大滾動次數 (${maxScrolls})，未找到 ICCID: ${targetIccid}`);
     return false;
-}
-
-async function simulatePostRequest(page, iccid) {
-    try {
-        // 攔截 POST 請求以獲取 headers 和 payload
-        let postData = null;
-        let headers = null;
-        await page.setRequestInterception(true);
-        page.on('request', request => {
-            if (request.method() === 'POST' && request.url().includes('/UIDL/')) {
-                postData = request.postData();
-                headers = request.headers();
-                log('info', `攔截到 POST 請求: URL=${request.url()}, Headers=${JSON.stringify(headers)}, Payload=${postData}`);
-            }
-            request.continue();
-        });
-
-        // 輸入 ICCID 並觸發請求
-        const inputSelector = 'input#quick-search-input';
-        const iccidInput = await page.waitForSelector(inputSelector, { timeout: 30000 });
-        await iccidInput.click({ clickCount: 3 });
-        await page.evaluate((inputId) => {
-            const input = document.querySelector(inputId);
-            input.value = '';
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-        }, inputSelector);
-        await iccidInput.type(iccid);
-        await page.evaluate((inputId, value) => {
-            const input = document.querySelector(inputId);
-            input.value = value;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.dispatchEvent(new Event('keyup', { bubbles: true }));
-            input.dispatchEvent(new Event('blur', { bubbles: true }));
-            input.dispatchEvent(new Event('keydown', { bubbles: true }));
-        }, inputSelector, iccid);
-        await iccidInput.press('Enter');
-        await page.waitForTimeout(5000);
-
-        // 模擬 POST 請求（假設 payload 格式）
-        if (postData && headers) {
-            const response = await page.evaluate(async (url, headers, postData) => {
-                try {
-                    const res = await fetch(url, {
-                        method: 'POST',
-                        headers: headers,
-                        body: postData
-                    });
-                    return await res.text();
-                } catch (error) {
-                    return `POST 請求失敗: ${error.message}`;
-                }
-            }, 'https://iot.app.consoleconnect.com/portal/UIDL/?v-uiId=11', headers, postData);
-            log('info', `模擬 POST 請求響應: ${response.slice(0, 1000)}`);
-            return response;
-        } else {
-            log('warning', '未攔截到 POST 請求，依賴 UI 操作');
-            return null;
-        }
-    } catch (error) {
-        log('error', `模擬 POST 請求失敗: ${error.message}`);
-        return null;
-    }
 }
 
 app.get('/healthz', (req, res) => {
@@ -263,7 +296,7 @@ app.post('/check-sim', async (req, res) => {
     const [value, release] = await mutex.acquire();
     try {
         const { iccid } = req.body;
-        const cleanedIccid = iccid.replace(/\s/g, ''); // 去除空格
+        const cleanedIccid = iccid.replace(/\s/g, '');
         if (!cleanedIccid || !/^\d{19,20}$/.test(cleanedIccid)) {
             log('warning', `無效的 ICCID 格式: ${iccid}`);
             return res.status(400).json({ message: '無效的ICCID格式，需為19或20位數字' });
@@ -278,14 +311,6 @@ app.post('/check-sim', async (req, res) => {
         const page = await browser.newPage();
         try {
             await page.setDefaultTimeout(30000);
-            await page.setRequestInterception(true);
-            page.on('request', (req) => {
-                if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
-                    req.abort();
-                } else {
-                    req.continue();
-                }
-            });
 
             await loadCookies(page);
             if (!await isSessionValid(page)) {
@@ -308,29 +333,11 @@ app.post('/check-sim', async (req, res) => {
             }
 
             // 嘗試模擬 POST 請求
-            const postResponse = await simulatePostRequest(page, cleanedIccid);
-            if (postResponse) {
-                // 解析 POST 響應（假設返回 JSON 或 HTML）
-                try {
-                    const result = {};
-                    const parsedData = JSON.parse(postResponse); // 假設響應為 JSON，需根據實際格式調整
-                    if (parsedData.iccid === cleanedIccid) {
-                        result.imsi = parsedData.imsi || 'N/A';
-                        result.iccid = parsedData.iccid;
-                        result.msisdn = parsedData.msisdn || 'N/A';
-                        result.status = parsedData.status || 'N/A';
-                        result.activation_date = parsedData.activation_date || 'N/A';
-                        result.termination_date = 'N/A';
-                        result.data_usage = parsedData.data_usage || 'N/A';
-                        log('info', `POST 請求查詢成功: ${cleanedIccid}`);
-                        res.json(result);
-                        return;
-                    } else {
-                        log('info', `POST 請求未找到 ICCID: ${cleanedIccid}`);
-                    }
-                } catch (error) {
-                    log('error', `解析 POST 響應失敗: ${error.message}`);
-                }
+            const postResult = await simulatePostRequest(page, cleanedIccid);
+            if (postResult) {
+                log('info', `POST 請求查詢成功: ${cleanedIccid}`);
+                res.json(postResult);
+                return;
             }
 
             // 備用：UI 操作
@@ -354,7 +361,7 @@ app.post('/check-sim', async (req, res) => {
                 input.dispatchEvent(new Event('input', { bubbles: true }));
                 input.dispatchEvent(new Event('change', { bubbles: true }));
             }, inputSelector);
-            await iccidInput.type(cleanedIccid);
+            await iccidInput.type(cleanedIccid, { delay: 100 });
             await page.evaluate((inputId, value) => {
                 const input = document.querySelector(inputId);
                 input.value = value;
@@ -383,7 +390,7 @@ app.post('/check-sim', async (req, res) => {
                     const rows = document.querySelectorAll('table tbody tr:not([style*="display: none"])');
                     const loading = document.querySelector('table')?.classList.contains('loading');
                     return table && !loading && rows.length <= 1;
-                }, { timeout: 60000 }); // 延長等待時間
+                }, { timeout: 60000 });
             } catch (error) {
                 const rowCount = await page.evaluate(() => document.querySelectorAll('table tbody tr:not([style*="display: none"])').length);
                 log('error', `表格過濾失敗，行數: ${rowCount}, 錯誤: ${error.message}`);
@@ -395,7 +402,7 @@ app.post('/check-sim', async (req, res) => {
                     input.dispatchEvent(new Event('input', { bubbles: true }));
                     input.dispatchEvent(new Event('change', { bubbles: true }));
                 }, inputSelector);
-                await iccidInput.type(cleanedIccid);
+                await iccidInput.type(cleanedIccid, { delay: 100 });
                 await page.evaluate((inputId, value) => {
                     const input = document.querySelector(inputId);
                     input.value = value;
