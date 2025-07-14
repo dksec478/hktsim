@@ -1,6 +1,5 @@
 FROM node:18-slim
 
-# 安裝 Chromium 和依賴
 RUN apt-get update && apt-get install -y \
     chromium \
     fonts-liberation \
@@ -20,18 +19,9 @@ RUN apt-get update && apt-get install -y \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# 設置工作目錄
 WORKDIR /app
-
-# 複製並安裝依賴
 COPY package.json .
 RUN npm install
-
-# 複製應用程式碼
 COPY . .
-
-# 暴露端口
 EXPOSE 5000
-
-# 運行應用
 CMD ["npm", "start"]

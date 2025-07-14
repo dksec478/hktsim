@@ -5,20 +5,17 @@ const path = require('path');
 const app = express();
 const port = process.env.PORT || 5000;
 
-// 中間件：解析 JSON 和限制並發
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 const { Semaphore } = require('async-mutex');
 const mutex = new Semaphore(1);
 
-// 日誌設置
 const log = (level, message) => {
     const timestamp = new Date().toISOString();
     console.log(`${timestamp} - ${level} - ${message}`);
     fs.appendFile(path.join(__dirname, 'app.log'), `${timestamp} - ${level} - ${message}\n`).catch(() => {});
 };
 
-// 全局瀏覽器實例
 let browser = null;
 const COOKIES_FILE = '/tmp/cookies.json';
 const USERNAME = process.env.SIM_USERNAME || 'mttelecom_admin';
@@ -30,8 +27,6 @@ async function initBrowser() {
             await browser.close();
             log('info', '關閉舊瀏覽器實例');
         }
-        const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || (await puppeteer.executablePath());
-        log('info', `使用 Chromium 路徑: ${executablePath}`);
         browser = await puppeteer.launch({
             headless: 'new',
             args: [
@@ -45,8 +40,7 @@ async function initBrowser() {
                 '--disable-setuid-sandbox',
                 '--window-size=1280,720',
                 '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            ],
-            executablePath
+            ]
         });
         log('info', '瀏覽器初始化成功');
         return browser;
@@ -132,7 +126,6 @@ async function login(page) {
     }
 }
 
-// 提供靜態檔案
 app.get('/', async (req, res) => {
     try {
         res.sendFile(path.join(__dirname, 'index.html'));
@@ -160,7 +153,6 @@ app.get('/script.js', async (req, res) => {
     }
 });
 
-// 查詢 API
 app.post('/check-sim', async (req, res) => {
     const [value, release] = await mutex.acquire();
     try {
@@ -179,7 +171,6 @@ app.post('/check-sim', async (req, res) => {
         const page = await browser.newPage();
         try {
             await page.setDefaultTimeout(15000);
-            // 禁用不必要資源以減少記憶體
             await page.setRequestInterception(true);
             page.on('request', (req) => {
                 if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
@@ -278,7 +269,6 @@ app.post('/check-sim', async (req, res) => {
     }
 });
 
-// 清理
 process.on('SIGTERM', async () => {
     if (browser) {
         await browser.close();
