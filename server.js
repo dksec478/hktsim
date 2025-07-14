@@ -7,6 +7,12 @@ const port = process.env.PORT || 5000;
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    next();
+});
 const { Semaphore } = require('async-mutex');
 const mutex = new Semaphore(1);
 
@@ -27,6 +33,8 @@ async function initBrowser() {
             await browser.close();
             log('info', '關閉舊瀏覽器實例');
         }
+        const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
+        log('info', `使用 Chromium 路徑: ${executablePath}`);
         browser = await puppeteer.launch({
             headless: 'new',
             args: [
@@ -40,7 +48,8 @@ async function initBrowser() {
                 '--disable-setuid-sandbox',
                 '--window-size=1280,720',
                 '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            ]
+            ],
+            executablePath
         });
         log('info', '瀏覽器初始化成功');
         return browser;
@@ -125,6 +134,10 @@ async function login(page) {
         return false;
     }
 }
+
+app.get('/healthz', (req, res) => {
+    res.status(200).json({ status: 'OK' });
+});
 
 app.get('/', async (req, res) => {
     try {
