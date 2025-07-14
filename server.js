@@ -8,11 +8,12 @@ const port = process.env.PORT || 5000;
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Origin', 'https://roamfree.com.hk');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     next();
 });
+
 const { Semaphore } = require('async-mutex');
 const mutex = new Semaphore(1);
 
@@ -47,6 +48,7 @@ async function initBrowser() {
                 '--no-zygote',
                 '--disable-setuid-sandbox',
                 '--window-size=1280,720',
+                '--disable-features=site-per-process', // 減少內存使用
                 '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             ],
             executablePath
@@ -87,16 +89,16 @@ async function loadCookies(page) {
 
 async function isSessionValid(page) {
     try {
-        await page.goto('https://iot.app.consoleconnect.com/portal/#/zh_TW/72000044/subscriptions/', { waitUntil: 'networkidle2', timeout: 15000 });
+        await page.goto('https://iot.app.consoleconnect.com/portal/#/zh_TW/72000044/subscriptions/', { waitUntil: 'networkidle2', timeout: 30000 });
         const url = page.url();
         log('info', `當前頁面 URL: ${url}`);
         if (url.includes('login') || url.includes('auth')) {
             log('info', '導向登錄頁面，會話無效');
             return false;
         }
-        const inputSelector = 'input[placeholder], input[type="text"], input[name="search"]';
+        const inputSelector = 'input#quick-search-input';
         try {
-            await page.waitForSelector(inputSelector, { timeout: 15000 });
+            await page.waitForSelector(inputSelector, { timeout: 30000 });
             log('info', '會話有效，找到輸入框');
             return true;
         } catch (error) {
@@ -112,14 +114,14 @@ async function isSessionValid(page) {
 
 async function login(page) {
     try {
-        await page.goto('https://iot.app.consoleconnect.com/', { waitUntil: 'networkidle2', timeout: 15000 });
+        await page.goto('https://iot.app.consoleconnect.com/', { waitUntil: 'networkidle2', timeout: 30000 });
         const url = page.url();
         log('info', `登錄頁面 URL: ${url}`);
         await page.waitForSelector('input[name="username"]', { timeout: 10000 });
         await page.type('input[name="username"]', USERNAME);
         await page.type('input[name="password"]', PASSWORD);
         await page.click('input[type="submit"]');
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
         await saveCookies(page);
         const postLoginUrl = page.url();
         log('info', `登錄後頁面 URL: ${postLoginUrl}`);
@@ -170,12 +172,13 @@ app.post('/check-sim', async (req, res) => {
     const [value, release] = await mutex.acquire();
     try {
         const { iccid } = req.body;
-        if (!iccid || !/^\d{19,20}$/.test(iccid)) {
+        const cleanedIccid = iccid.replace(/\s/g, ''); // 去除空格
+        if (!cleanedIccid || !/^\d{19,20}$/.test(cleanedIccid)) {
             log('warning', `無效的 ICCID 格式: ${iccid}`);
-            return res.status(400).json({ message: '無效的ICCID格式' });
+            return res.status(400).json({ message: '無效的ICCID格式，需為19或20位數字' });
         }
 
-        log('info', `開始查詢 ICCID: ${iccid}`);
+        log('info', `開始查詢 ICCID: ${cleanedIccid}`);
         const startTime = Date.now();
 
         if (!browser) {
@@ -183,7 +186,7 @@ app.post('/check-sim', async (req, res) => {
         }
         const page = await browser.newPage();
         try {
-            await page.setDefaultTimeout(15000);
+            await page.setDefaultTimeout(30000);
             await page.setRequestInterception(true);
             page.on('request', (req) => {
                 if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
@@ -204,7 +207,7 @@ app.post('/check-sim', async (req, res) => {
             }
 
             log('info', `訪問查詢頁面: https://iot.app.consoleconnect.com/portal/#/zh_TW/72000044/subscriptions/`);
-            await page.goto('https://iot.app.consoleconnect.com/portal/#/zh_TW/72000044/subscriptions/', { waitUntil: 'networkidle2', timeout: 15000 });
+            await page.goto('https://iot.app.consoleconnect.com/portal/#/zh_TW/72000044/subscriptions/', { waitUntil: 'networkidle2', timeout: 30000 });
             const url = page.url();
             log('info', `當前頁面 URL: ${url}`);
             if (url.includes('login') || url.includes('auth')) {
@@ -213,59 +216,135 @@ app.post('/check-sim', async (req, res) => {
                 return;
             }
 
-            const inputSelector = 'input[placeholder], input[type="text"], input[name="search"]';
-            const iccidInput = await page.waitForSelector(inputSelector, { timeout: 15000 });
-            log('info', '找到 ICCID 輸入框');
-            await iccidInput.type(iccid);
+            // 使用正確的輸入框選擇器
+            const inputSelector = 'input#quick-search-input';
+            let iccidInput;
+            try {
+                iccidInput = await page.waitForSelector(inputSelector, { timeout: 30000 });
+                log('info', '找到 ICCID 輸入框');
+            } catch (error) {
+                const pageContent = await page.evaluate(() => document.body.innerHTML.slice(0, 1000));
+                log('error', `輸入框選擇器失敗: ${error.message}, 頁面內容: ${pageContent}`);
+                res.status(500).json({ message: `無法找到輸入框：${error.message}` });
+                return;
+            }
+
+            await iccidInput.type(cleanedIccid);
             await iccidInput.press('Enter');
             log('info', '已輸入 ICCID 並提交');
 
+            // 檢查是否有搜索按鈕並點擊
+            const searchButton = await page.$('button[aria-label="Search"], button[type="submit"], button[title="Search"]');
+            if (searchButton) {
+                log('info', '找到搜索按鈕，執行點擊');
+                await searchButton.click();
+                await page.waitForTimeout(2000); // 等待表格刷新
+            }
+
+            // 等待表格完全加載
+            try {
+                await page.waitForFunction(() => {
+                    const table = document.querySelector('table tbody');
+                    const loading = document.querySelector('table')?.classList.contains('loading');
+                    return table && !loading;
+                }, { timeout: 30000 });
+            } catch (error) {
+                log('error', `表格加載失敗: ${error.message}`);
+                res.status(500).json({ message: `表格加載失敗：${error.message}` });
+                return;
+            }
+
             const result = {};
             try {
-                await page.waitForSelector('table tbody tr', { timeout: 15000 });
                 const rows = await page.$$('table tbody tr:not([style*="display: none"])');
                 log('info', `找到 ${rows.length} 個可見表格行`);
 
+                // 記錄表格內容以便診斷
                 const tableContent = await page.evaluate(() => {
                     const table = document.querySelector('table tbody');
                     return table ? table.innerText.slice(0, 1000) : '無表格內容';
                 });
                 log('info', `表格內容: ${tableContent}`);
 
-                for (const row of rows) {
-                    try {
-                        const iccidCell = await row.$eval('td:nth-child(4)', el => el.textContent.trim());
-                        log('info', `檢查行，ICCID: ${iccidCell}`);
-                        if (iccidCell === iccid) {
-                            result.imsi = await row.$eval('td:nth-child(2)', el => el.textContent.trim()) || 'N/A';
-                            result.iccid = iccidCell;
-                            result.msisdn = await row.$eval('td:nth-child(5)', el => el.textContent.trim()) || 'N/A';
-                            result.status = await row.$eval('td:nth-child(8)', el => el.textContent.trim()) || 'N/A';
-                            result.activation_date = await row.$eval('td:nth-child(12)', el => el.textContent.trim()) || 'N/A';
-                            result.termination_date = await row.$eval('td:nth-child(13)', el => el.textContent.trim()) || 'N/A';
+                // 根據網站行為：正確 ICCID 返回 1 行，無效返回 0 行
+                if (rows.length === 0) {
+                    log('info', `查無 ICCID: ${cleanedIccid}，表格無數據`);
+                    res.status(404).json({ message: `查無此ICCID：${cleanedIccid}，請確認輸入正確！` });
+                    return;
+                }
+
+                if (rows.length > 1) {
+                    log('warning', `查詢返回 ${rows.length} 行，預期僅 1 行，嘗試分頁處理`);
+                    // 分頁處理（備用）
+                    while (true) {
+                        for (const row of rows) {
                             try {
-                                result.data_usage = await row.$eval('td:nth-child(21)', el => el.textContent.trim()) || 'N/A';
-                                log('info', `數據使用: ${result.data_usage}`);
-                            } catch {
-                                result.data_usage = 'N/A';
-                                log('warning', '無法提取數據使用');
+                                const iccidCell = await row.$eval('td:nth-child(4)', el => el.textContent.trim());
+                                log('info', `檢查行，ICCID: ${iccidCell}`);
+                                if (iccidCell === cleanedIccid) {
+                                    result.imsi = await row.$eval('td:nth-child(2)', el => el.textContent.trim()) || 'N/A';
+                                    result.iccid = iccidCell;
+                                    result.msisdn = await row.$eval('td:nth-child(5)', el => el.textContent.trim()) || 'N/A';
+                                    result.status = await row.$eval('td:nth-child(8)', el => el.textContent.trim()) || 'N/A';
+                                    result.activation_date = await row.$eval('td:nth-child(12)', el => el.textContent.trim()) || 'N/A';
+                                    result.termination_date = await row.$eval('td:nth-child(13)', el => el.textContent.trim()) || 'N/A';
+                                    try {
+                                        result.data_usage = await row.$eval('td:nth-child(21)', el => el.textContent.trim()) || 'N/A';
+                                        log('info', `數據使用: ${result.data_usage}`);
+                                    } catch {
+                                        result.data_usage = 'N/A';
+                                        log('warning', '無法提取數據使用');
+                                    }
+                                    log('info', `查詢成功: ${cleanedIccid}`);
+                                    res.json(result);
+                                    return;
+                                }
+                            } catch (error) {
+                                log('warning', `提取行數據失敗: ${error.message}`);
+                                continue;
                             }
-                            log('info', `查詢成功: ${iccid}`);
-                            res.json(result);
+                        }
+                        const nextButton = await page.$('button[aria-label="Next"]:not([disabled])');
+                        if (!nextButton) {
+                            log('info', `查無 ICCID: ${cleanedIccid}，無更多頁面`);
+                            res.status(404).json({ message: `查無此ICCID：${cleanedIccid}，請確認輸入正確！` });
                             return;
                         }
-                    } catch (error) {
-                        log('warning', `提取行數據失敗: ${error.message}`);
-                        continue;
+                        log('info', '點擊下一頁');
+                        await nextButton.click();
+                        await page.waitForTimeout(2000);
+                        rows = await page.$$('table tbody tr:not([style*="display: none"])');
                     }
                 }
 
-                log('info', `查無 ICCID: ${iccid}，未找到匹配行`);
-                res.status(404).json({ message: `查無此ICCID：${iccid}，請確認輸入正確！` });
+                // 處理單行結果
+                const row = rows[0];
+                const iccidCell = await row.$eval('td:nth-child(4)', el => el.textContent.trim());
+                if (iccidCell === cleanedIccid) {
+                    result.imsi = await row.$eval('td:nth-child(2)', el => el.textContent.trim()) || 'N/A';
+                    result.iccid = iccidCell;
+                    result.msisdn = await row.$eval('td:nth-child(5)', el => el.textContent.trim()) || 'N/A';
+                    result.status = await row.$eval('td:nth-child(8)', el => el.textContent.trim()) || 'N/A';
+                    result.activation_date = await row.$eval('td:nth-child(12)', el => el.textContent.trim()) || 'N/A';
+                    result.termination_date = await row.$eval('td:nth-child(13)', el => el.textContent.trim()) || 'N/A';
+                    try {
+                        result.data_usage = await row.$eval('td:nth-child(21)', el => el.textContent.trim()) || 'N/A';
+                        log('info', `數據使用: ${result.data_usage}`);
+                    } catch {
+                        result.data_usage = 'N/A';
+                        log('warning', '無法提取數據使用');
+                    }
+                    log('info', `查詢成功: ${cleanedIccid}`);
+                    res.json(result);
+                } else {
+                    log('info', `查無 ICCID: ${cleanedIccid}，表格行不匹配`);
+                    res.status(404).json({ message: `查無此ICCID：${cleanedIccid}，請確認輸入正確！` });
+                }
             } catch (error) {
+                const pageUrl = page.url();
                 const pageContent = await page.evaluate(() => document.body.innerHTML.slice(0, 1000));
-                log('error', `表格加載失敗: ${error.message}, 頁面內容: ${pageContent}`);
-                res.status(404).json({ message: `查無此ICCID：${iccid}，請確認輸入正確！` });
+                log('error', `表格加載失敗: ${error.message}, URL: ${pageUrl}, 頁面內容: ${pageContent}`);
+                res.status(500).json({ message: `查詢失敗：${error.message}` });
             } finally {
                 await page.close();
                 log('info', `查詢完成，耗時 ${(Date.now() - startTime) / 1000} 秒`);
