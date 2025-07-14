@@ -137,22 +137,95 @@ async function login(page) {
     }
 }
 
-async function scrollToLoadMore(page, maxScrolls = 100) {
+async function scrollToLoadMore(page, targetIccid, maxScrolls = 100) {
     let scrollCount = 0;
     let previousRowCount = 0;
     while (scrollCount < maxScrolls) {
         const currentRowCount = await page.evaluate(() => document.querySelectorAll('table tbody tr:not([style*="display: none"])').length);
-        log('info', `當前表格行數: ${currentRowCount}, 滾動次數: ${scrollCount + 1}`);
+        const iccids = await page.evaluate(() => {
+            const rows = document.querySelectorAll('table tbody tr:not([style*="display: none"])');
+            return Array.from(rows).map(row => row.querySelector('td:nth-child(4)')?.textContent.trim() || '');
+        });
+        log('info', `當前表格行數: ${currentRowCount}, ICCIDs: ${iccids.join(', ')}, 滾動次數: ${scrollCount + 1}`);
+        if (iccids.includes(targetIccid)) {
+            log('info', `找到目標 ICCID: ${targetIccid}`);
+            return true;
+        }
         if (currentRowCount === previousRowCount && scrollCount > 0) {
             log('info', '無更多數據加載');
-            break;
+            return false;
         }
         await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-        await page.waitForTimeout(2000); // 等待新數據加載
+        await page.waitForTimeout(5000); // 增加等待時間
         previousRowCount = currentRowCount;
         scrollCount++;
     }
-    return scrollCount;
+    log('warning', `超過最大滾動次數 (${maxScrolls})，未找到 ICCID: ${targetIccid}`);
+    return false;
+}
+
+async function simulatePostRequest(page, iccid) {
+    try {
+        // 攔截 POST 請求以獲取 headers 和 payload
+        let postData = null;
+        let headers = null;
+        await page.setRequestInterception(true);
+        page.on('request', request => {
+            if (request.method() === 'POST' && request.url().includes('/UIDL/')) {
+                postData = request.postData();
+                headers = request.headers();
+                log('info', `攔截到 POST 請求: URL=${request.url()}, Headers=${JSON.stringify(headers)}, Payload=${postData}`);
+            }
+            request.continue();
+        });
+
+        // 輸入 ICCID 並觸發請求
+        const inputSelector = 'input#quick-search-input';
+        const iccidInput = await page.waitForSelector(inputSelector, { timeout: 30000 });
+        await iccidInput.click({ clickCount: 3 });
+        await page.evaluate((inputId) => {
+            const input = document.querySelector(inputId);
+            input.value = '';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        }, inputSelector);
+        await iccidInput.type(iccid);
+        await page.evaluate((inputId, value) => {
+            const input = document.querySelector(inputId);
+            input.value = value;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.dispatchEvent(new Event('keyup', { bubbles: true }));
+            input.dispatchEvent(new Event('blur', { bubbles: true }));
+            input.dispatchEvent(new Event('keydown', { bubbles: true }));
+        }, inputSelector, iccid);
+        await iccidInput.press('Enter');
+        await page.waitForTimeout(5000);
+
+        // 模擬 POST 請求（假設 payload 格式）
+        if (postData && headers) {
+            const response = await page.evaluate(async (url, headers, postData) => {
+                try {
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: headers,
+                        body: postData
+                    });
+                    return await res.text();
+                } catch (error) {
+                    return `POST 請求失敗: ${error.message}`;
+                }
+            }, 'https://iot.app.consoleconnect.com/portal/UIDL/?v-uiId=11', headers, postData);
+            log('info', `模擬 POST 請求響應: ${response.slice(0, 1000)}`);
+            return response;
+        } else {
+            log('warning', '未攔截到 POST 請求，依賴 UI 操作');
+            return null;
+        }
+    } catch (error) {
+        log('error', `模擬 POST 請求失敗: ${error.message}`);
+        return null;
+    }
 }
 
 app.get('/healthz', (req, res) => {
@@ -234,7 +307,33 @@ app.post('/check-sim', async (req, res) => {
                 return;
             }
 
-            // 使用正確的輸入框選擇器
+            // 嘗試模擬 POST 請求
+            const postResponse = await simulatePostRequest(page, cleanedIccid);
+            if (postResponse) {
+                // 解析 POST 響應（假設返回 JSON 或 HTML）
+                try {
+                    const result = {};
+                    const parsedData = JSON.parse(postResponse); // 假設響應為 JSON，需根據實際格式調整
+                    if (parsedData.iccid === cleanedIccid) {
+                        result.imsi = parsedData.imsi || 'N/A';
+                        result.iccid = parsedData.iccid;
+                        result.msisdn = parsedData.msisdn || 'N/A';
+                        result.status = parsedData.status || 'N/A';
+                        result.activation_date = parsedData.activation_date || 'N/A';
+                        result.termination_date = 'N/A';
+                        result.data_usage = parsedData.data_usage || 'N/A';
+                        log('info', `POST 請求查詢成功: ${cleanedIccid}`);
+                        res.json(result);
+                        return;
+                    } else {
+                        log('info', `POST 請求未找到 ICCID: ${cleanedIccid}`);
+                    }
+                } catch (error) {
+                    log('error', `解析 POST 響應失敗: ${error.message}`);
+                }
+            }
+
+            // 備用：UI 操作
             const inputSelector = 'input#quick-search-input';
             let iccidInput;
             try {
@@ -248,7 +347,13 @@ app.post('/check-sim', async (req, res) => {
             }
 
             // 清空輸入框並輸入 ICCID
-            await iccidInput.click({ clickCount: 3 }); // 選中並清空
+            await iccidInput.click({ clickCount: 3 });
+            await page.evaluate((inputId) => {
+                const input = document.querySelector(inputId);
+                input.value = '';
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+            }, inputSelector);
             await iccidInput.type(cleanedIccid);
             await page.evaluate((inputId, value) => {
                 const input = document.querySelector(inputId);
@@ -256,35 +361,19 @@ app.post('/check-sim', async (req, res) => {
                 input.dispatchEvent(new Event('input', { bubbles: true }));
                 input.dispatchEvent(new Event('change', { bubbles: true }));
                 input.dispatchEvent(new Event('keyup', { bubbles: true }));
+                input.dispatchEvent(new Event('blur', { bubbles: true }));
+                input.dispatchEvent(new Event('keydown', { bubbles: true }));
             }, inputSelector, cleanedIccid);
             await iccidInput.press('Enter');
             log('info', '已輸入 ICCID 並提交');
 
-            // 檢查並點擊搜索按鈕（備用）
-            const searchButtonSelectors = [
-                'button[aria-label="Search"]',
-                'button[type="submit"]',
-                'button[title="Search"]',
-                'button.v-button.v-widget[aria-label="Search"]',
-                'button.v-button',
-                'button:contains("Search")',
-                'button:contains("查詢")'
-            ];
-            let searchButton = null;
-            for (const selector of searchButtonSelectors) {
-                try {
-                    searchButton = await page.$(selector);
-                    if (searchButton) break;
-                } catch (error) {
-                    log('info', `未找到按鈕選擇器 ${selector}: ${error.message}`);
-                }
-            }
-            if (searchButton) {
-                log('info', '找到搜索按鈕，執行點擊');
-                await searchButton.click();
-                await page.waitForTimeout(3000); // 等待表格刷新
-            } else {
-                log('info', '未找到搜索按鈕，依賴自動加載');
+            // 驗證輸入框值
+            const inputValue = await page.evaluate((inputId) => document.querySelector(inputId).value, inputSelector);
+            log('info', `輸入框值: ${inputValue}`);
+            if (inputValue !== cleanedIccid) {
+                log('error', `輸入框值不匹配，期望: ${cleanedIccid}, 實際: ${inputValue}`);
+                res.status(500).json({ message: `輸入框值不匹配：${inputValue}` });
+                return;
             }
 
             // 等待表格過濾完成（預期 0 或 1 行）
@@ -294,12 +383,18 @@ app.post('/check-sim', async (req, res) => {
                     const rows = document.querySelectorAll('table tbody tr:not([style*="display: none"])');
                     const loading = document.querySelector('table')?.classList.contains('loading');
                     return table && !loading && rows.length <= 1;
-                }, { timeout: 40000 }); // 延長等待時間
+                }, { timeout: 60000 }); // 延長等待時間
             } catch (error) {
                 const rowCount = await page.evaluate(() => document.querySelectorAll('table tbody tr:not([style*="display: none"])').length);
                 log('error', `表格過濾失敗，行數: ${rowCount}, 錯誤: ${error.message}`);
-                // 嘗試重新輸入
+                // 重新輸入
                 await iccidInput.click({ clickCount: 3 });
+                await page.evaluate((inputId) => {
+                    const input = document.querySelector(inputId);
+                    input.value = '';
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                }, inputSelector);
                 await iccidInput.type(cleanedIccid);
                 await page.evaluate((inputId, value) => {
                     const input = document.querySelector(inputId);
@@ -307,17 +402,21 @@ app.post('/check-sim', async (req, res) => {
                     input.dispatchEvent(new Event('input', { bubbles: true }));
                     input.dispatchEvent(new Event('change', { bubbles: true }));
                     input.dispatchEvent(new Event('keyup', { bubbles: true }));
+                    input.dispatchEvent(new Event('blur', { bubbles: true }));
+                    input.dispatchEvent(new Event('keydown', { bubbles: true }));
                 }, inputSelector, cleanedIccid);
                 await iccidInput.press('Enter');
-                if (searchButton) {
-                    await searchButton.click();
-                }
-                await page.waitForTimeout(3000);
+                await page.waitForTimeout(10000);
                 const retryRowCount = await page.evaluate(() => document.querySelectorAll('table tbody tr:not([style*="display: none"])').length);
                 if (retryRowCount > 1) {
                     log('error', `重新輸入後仍失敗，行數: ${retryRowCount}`);
                     // 嘗試無限滾動
-                    await scrollToLoadMore(page);
+                    const found = await scrollToLoadMore(page, cleanedIccid);
+                    if (!found) {
+                        log('error', `滾動後仍未找到 ICCID: ${cleanedIccid}`);
+                        res.status(404).json({ message: `查無此ICCID：${cleanedIccid}，請確認輸入正確！` });
+                        return;
+                    }
                 }
             }
 
@@ -336,47 +435,25 @@ app.post('/check-sim', async (req, res) => {
                 // 處理結果：預期 0 或 1 行
                 if (rows.length === 0) {
                     log('info', `查無 ICCID: ${cleanedIccid}，表格無數據`);
-                    res.status(404).json({ message: `查無此ICCID：${cleanedIccid}，請確認輸入正確！` });
-                    return;
+                    // 嘗試無限滾動
+                    const found = await scrollToLoadMore(page, cleanedIccid);
+                    if (!found) {
+                        res.status(404).json({ message: `查無此ICCID：${cleanedIccid}，請確認輸入正確！` });
+                        return;
+                    }
                 }
 
                 if (rows.length > 1) {
                     log('warning', `查詢返回 ${rows.length} 行，預期僅 1 行，嘗試無限滾動`);
-                    await scrollToLoadMore(page);
-                    const allRows = await page.$$('table tbody tr:not([style*="display: none"])');
-                    for (const row of allRows) {
-                        try {
-                            const iccidCell = await row.$eval('td:nth-child(4)', el => el.textContent.trim());
-                            log('info', `檢查行，ICCID: ${iccidCell}`);
-                            if (iccidCell === cleanedIccid) {
-                                result.imsi = await row.$eval('td:nth-child(2)', el => el.textContent.trim()) || 'N/A';
-                                result.iccid = iccidCell;
-                                result.msisdn = await row.$eval('td:nth-child(5)', el => el.textContent.trim()) || 'N/A';
-                                result.status = await row.$eval('td:nth-child(8)', el => el.textContent.trim()) || 'N/A';
-                                result.activation_date = await row.$eval('td:nth-child(12)', el => el.textContent.trim()) || 'N/A';
-                                result.termination_date = 'N/A';
-                                try {
-                                    result.data_usage = await row.$eval('td:nth-child(21)', el => el.textContent.trim()) || 'N/A';
-                                    log('info', `數據使用: ${result.data_usage}`);
-                                } catch {
-                                    result.data_usage = 'N/A';
-                                    log('warning', '無法提取數據使用');
-                                }
-                                log('info', `查詢成功: ${cleanedIccid}`);
-                                res.json(result);
-                                return;
-                            }
-                        } catch (error) {
-                            log('warning', `提取行數據失敗: ${error.message}`);
-                            continue;
-                        }
+                    const found = await scrollToLoadMore(page, cleanedIccid);
+                    if (!found) {
+                        log('error', `滾動後仍未找到 ICCID: ${cleanedIccid}`);
+                        res.status(404).json({ message: `查無此ICCID：${cleanedIccid}，請確認輸入正確！` });
+                        return;
                     }
-                    log('info', `查無 ICCID: ${cleanedIccid}，已滾動所有數據`);
-                    res.status(404).json({ message: `查無此ICCID：${cleanedIccid}，請確認輸入正確！` });
-                    return;
                 }
 
-                // 處理單行結果
+                // 檢查單行結果
                 const row = rows[0];
                 const iccidCell = await row.$eval('td:nth-child(4)', el => el.textContent.trim());
                 if (iccidCell === cleanedIccid) {
@@ -396,8 +473,42 @@ app.post('/check-sim', async (req, res) => {
                     log('info', `查詢成功: ${cleanedIccid}`);
                     res.json(result);
                 } else {
-                    log('info', `查無 ICCID: ${cleanedIccid}，表格行不匹配`);
-                    res.status(404).json({ message: `查無此ICCID：${cleanedIccid}，請確認輸入正確！` });
+                    log('info', `查無 ICCID: ${cleanedIccid}，表格行不匹配，嘗試滾動`);
+                    const found = await scrollToLoadMore(page, cleanedIccid);
+                    if (!found) {
+                        log('error', `滾動後仍未找到 ICCID: ${cleanedIccid}`);
+                        res.status(404).json({ message: `查無此ICCID：${cleanedIccid}，請確認輸入正確！` });
+                    } else {
+                        // 滾動後重新獲取行
+                        const allRows = await page.$$('table tbody tr:not([style*="display: none"])');
+                        for (const row of allRows) {
+                            try {
+                                const iccidCell = await row.$eval('td:nth-child(4)', el => el.textContent.trim());
+                                if (iccidCell === cleanedIccid) {
+                                    result.imsi = await row.$eval('td:nth-child(2)', el => el.textContent.trim()) || 'N/A';
+                                    result.iccid = iccidCell;
+                                    result.msisdn = await row.$eval('td:nth-child(5)', el => el.textContent.trim()) || 'N/A';
+                                    result.status = await row.$eval('td:nth-child(8)', el => el.textContent.trim()) || 'N/A';
+                                    result.activation_date = await row.$eval('td:nth-child(12)', el => el.textContent.trim()) || 'N/A';
+                                    result.termination_date = 'N/A';
+                                    try {
+                                        result.data_usage = await row.$eval('td:nth-child(21)', el => el.textContent.trim()) || 'N/A';
+                                        log('info', `數據使用: ${result.data_usage}`);
+                                    } catch {
+                                        result.data_usage = 'N/A';
+                                        log('warning', '無法提取數據使用');
+                                    }
+                                    log('info', `查詢成功: ${cleanedIccid}`);
+                                    res.json(result);
+                                    return;
+                                }
+                            } catch (error) {
+                                log('warning', `提取行數據失敗: ${error.message}`);
+                                continue;
+                            }
+                        }
+                        res.status(404).json({ message: `查無此ICCID：${cleanedIccid}，請確認輸入正確！` });
+                    }
                 }
             } catch (error) {
                 const pageUrl = page.url();
