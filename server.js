@@ -139,18 +139,26 @@ async function login(page) {
 
 async function simulatePostRequest(page, iccid) {
     try {
-        let postData = null;
-        let headers = null;
-        let foundRequest = false;
+        let csrfToken = null;
+        let syncId = 8; // 從日誌推測，需動態獲取
+        let clientId = 4; // 從日誌推測，需動態獲取
+        let cookies = null;
 
-        // 攔截 POST 請求
+        // 攔截初始請求以獲取 csrfToken 和 cookies
         await page.setRequestInterception(true);
         page.on('request', request => {
             if (request.method() === 'POST' && request.url().includes('/UIDL/')) {
-                postData = request.postData();
-                headers = request.headers();
-                log('info', `攔截到 POST 請求: URL=${request.url()}, Headers=${JSON.stringify(headers)}, Payload=${postData}`);
-                foundRequest = true;
+                const postData = request.postData();
+                try {
+                    const parsed = JSON.parse(postData);
+                    csrfToken = parsed.csrfToken;
+                    syncId = parsed.syncId || syncId;
+                    clientId = parsed.clientId || clientId;
+                    cookies = request.headers()['cookie'];
+                    log('info', `攔截到 POST 請求: URL=${request.url()}, csrfToken=${csrfToken}, syncId=${syncId}, clientId=${clientId}, Cookies=${cookies}`);
+                } catch (error) {
+                    log('warning', `解析 POST 數據失敗: ${error.message}`);
+                }
                 request.continue();
             } else {
                 if (['image', 'stylesheet', 'font', 'media'].includes(request.resourceType())) {
@@ -161,71 +169,73 @@ async function simulatePostRequest(page, iccid) {
             }
         });
 
-        // 輸入 ICCID 並觸發請求
-        const inputSelector = 'input#quick-search-input';
-        const iccidInput = await page.waitForSelector(inputSelector, { timeout: 30000 });
-        await iccidInput.click({ clickCount: 3 });
-        await page.evaluate((inputId) => {
-            const input = document.querySelector(inputId);
-            input.value = '';
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-        }, inputSelector);
-        await iccidInput.type(iccid, { delay: 100 }); // 模擬人類輸入
-        await page.evaluate((inputId, value) => {
-            const input = document.querySelector(inputId);
-            input.value = value;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.dispatchEvent(new Event('keyup', { bubbles: true }));
-            input.dispatchEvent(new Event('blur', { bubbles: true }));
-            input.dispatchEvent(new Event('keydown', { bubbles: true }));
-        }, inputSelector, iccid);
-        await iccidInput.press('Enter');
+        // 觸發初始請求以獲取 csrfToken
+        await page.goto('https://iot.app.consoleconnect.com/portal/#/zh_TW/72000044/subscriptions/', { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.waitForTimeout(5000);
 
-        // 等待 POST 請求響應
-        let responseData = null;
-        try {
-            const response = await page.waitForResponse(
-                response => response.url().includes('/UIDL/') && response.request().method() === 'POST',
-                { timeout: 10000 }
-            );
-            responseData = await response.text();
-            log('info', `POST 請求響應: ${responseData.slice(0, 1000)}`);
-        } catch (error) {
-            log('warning', `未捕獲 POST 響應: ${error.message}`);
-        }
+        // 模擬查詢 ICCID 的 POST 請求
+        if (csrfToken && cookies) {
+            const payload = {
+                csrfToken: csrfToken,
+                rpc: [[765, "com.vaadin.shared.ui.textfield.AbstractTextFieldServerRpc", "setText", [iccid, iccid.length]]],
+                syncId: syncId,
+                clientId: clientId
+            };
+            const response = await page.evaluate(async (url, headers, payload) => {
+                try {
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: headers,
+                        body: JSON.stringify(payload)
+                    });
+                    return await res.text();
+                } catch (error) {
+                    return `POST 請求失敗: ${error.message}`;
+                }
+            }, 'https://iot.app.consoleconnect.com/portal/UIDL/?v-uiId=0', {
+                'Content-Type': 'application/json; charset=UTF-8',
+                'Cookie': cookies,
+                'Origin': 'https://iot.app.consoleconnect.com',
+                'Referer': 'https://iot.app.consoleconnect.com/portal/',
+                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }, payload);
 
-        // 關閉攔截以避免後續錯誤
-        await page.setRequestInterception(false);
+            log('info', `模擬 POST 請求響應: ${response.slice(0, 1000)}`);
 
-        if (foundRequest && responseData) {
-            // 解析響應（假設為 Vaadin UIDL 格式）
+            // 等待後續 requestRows 請求
+            let result = null;
             try {
-                const parsedData = JSON.parse(responseData);
-                // 假設響應包含表格數據
+                const rowResponse = await page.waitForResponse(
+                    response => response.url().includes('/UIDL/') && response.request().method() === 'POST' && response.request().postData().includes('requestRows'),
+                    { timeout: 10000 }
+                );
+                const rowData = await rowResponse.text();
+                log('info', `requestRows 響應: ${rowData.slice(0, 1000)}`);
+                const parsedData = JSON.parse(rowData.replace(/^for\(;;\);/, ''));
                 const rows = parsedData.changes?.find(change => change.type === 'put' && change.key === 'rows')?.value || [];
                 for (const row of rows) {
-                    if (row.iccid === iccid) {
-                        return {
-                            imsi: row.imsi || 'N/A',
-                            iccid: row.iccid,
-                            msisdn: row.msisdn || 'N/A',
-                            status: row.status || 'N/A',
-                            activation_date: row.activation_date || 'N/A',
+                    if (row[3] === iccid) { // ICCID 在第 4 列（索引 3）
+                        result = {
+                            imsi: row[1] || 'N/A',
+                            iccid: row[3],
+                            msisdn: row[4] || 'N/A',
+                            status: row[7] || 'N/A',
+                            activation_date: row[11] || 'N/A',
                             termination_date: 'N/A',
-                            data_usage: row.data_usage || 'N/A'
+                            data_usage: row[20] || 'N/A'
                         };
+                        break;
                     }
                 }
-                log('info', `POST 請求未找到 ICCID: ${iccid}`);
-                return null;
             } catch (error) {
-                log('error', `解析 POST 響應失敗: ${error.message}`);
-                return null;
+                log('warning', `未捕獲 requestRows 響應: ${error.message}`);
             }
+
+            // 關閉攔截
+            await page.setRequestInterception(false);
+            return result;
         } else {
-            log('warning', '未攔截到查詢 POST 請求，依賴 UI 操作');
+            log('warning', '未獲取 csrfToken 或 cookies，依賴 UI 操作');
             return null;
         }
     } catch (error) {
@@ -322,6 +332,15 @@ app.post('/check-sim', async (req, res) => {
                 }
             }
 
+            // 嘗試模擬 POST 請求
+            const postResult = await simulatePostRequest(page, cleanedIccid);
+            if (postResult) {
+                log('info', `POST 請求查詢成功: ${cleanedIccid}`);
+                res.json(postResult);
+                return;
+            }
+
+            // 備用：UI 操作
             log('info', `訪問查詢頁面: https://iot.app.consoleconnect.com/portal/#/zh_TW/72000044/subscriptions/`);
             await page.goto('https://iot.app.consoleconnect.com/portal/#/zh_TW/72000044/subscriptions/', { waitUntil: 'networkidle2', timeout: 30000 });
             const url = page.url();
@@ -332,15 +351,6 @@ app.post('/check-sim', async (req, res) => {
                 return;
             }
 
-            // 嘗試模擬 POST 請求
-            const postResult = await simulatePostRequest(page, cleanedIccid);
-            if (postResult) {
-                log('info', `POST 請求查詢成功: ${cleanedIccid}`);
-                res.json(postResult);
-                return;
-            }
-
-            // 備用：UI 操作
             const inputSelector = 'input#quick-search-input';
             let iccidInput;
             try {
